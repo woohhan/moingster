@@ -1,3 +1,5 @@
 build/_output
 build/_test
 *.swp
+docs/design/moingster_poc/inventory/artifacts/
+docs/design/moingster_poc/inventory/credentials/

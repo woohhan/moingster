@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kubespray
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: kubespray
+        image: quay.io/woohhan/kubespray-docker:latest
+        command: ["ansible-playbook", "-i", "/inventory/hosts.yaml", "--become", "--become-user=root", "cluster.yml", "--private-key=/ssh/id_rsa"]
+        volumeMounts:
+        - mountPath: /inventory
+          name: inventory
+        - mountPath: /ssh
+          name: sshkey
+      volumes:
+      - name: inventory
+        hostPath:
+          path: /home/whhan91/.go/src/moingster/docs/design/moingster_poc/inventory
+      - name: sshkey
+        hostPath:
+          path: /home/whhan91/.ssh
+  backoffLimit: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: k8s
+spec:
+  type: NodePort
+  ports:
+  - port: 6443
+    protocol: TCP
+  selector:
+    k8sCluster: moing

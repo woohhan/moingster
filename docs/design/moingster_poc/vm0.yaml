@@ -1,0 +1,58 @@
+apiVersion: kubevirt.io/v1alpha3
+kind: VirtualMachine
+metadata:
+  generation: 1
+  labels:
+    kubevirt.io/os: linux
+  name: vm0
+spec:
+  running: true
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        kubevirt.io/domain: vm0
+        k8sCluster: moing
+    spec:
+      domain:
+        cpu:
+          cores: 4
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: disk0
+          - cdrom:
+              bus: sata
+              readonly: true
+            name: cloudinitdisk
+        machine:
+          type: q35
+        resources:
+          requests:
+            memory: 8192M
+      volumes:
+      - name: disk0
+        persistentVolumeClaim:
+          claimName: disk0
+      - cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            hostname: vm0
+            ssh_pwauth: True
+            disable_root: false
+            ssh_authorized_keys:
+            - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC80/fWj6TZI/OHXGnPhpu9nn9ESFiIwgx8hPiWvhjl5/Pi2sR6asoQCEnF4kpIGoanY8dkokX+YUzrazvETtLWkvST9ZQ1gWe4cZkyICzPpT9FmTdY3/Wldo2sIWfIOYsHCH/UV7jURWm2kTHy2IVonMMGohSwPEpcxAR54vQstSVCKs9WoWvXGMEf8OaLUpKZkHOSu1dkPJAE74A8qaaaBPo2PATUFT17JH7D19bd4JMkHj3PIsmJbi6n9yKo2zWRs9kqRFPzt381K0rdWXvQPt2ZFyZ89U4GcCBHcYF5Bj8oWc60eriPByMyuRvdMAv8ZWXiazuBSZkN5bkZEUdp whhan91@whhan91-pc
+        name: cloudinitdisk
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vm0
+spec:
+  type: ClusterIP
+  selector:
+    kubevirt.io/domain: vm0
+  ports:
+  - protocol: TCP
+    port: 22

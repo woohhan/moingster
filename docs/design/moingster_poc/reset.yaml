@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kubespray
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: kubespray
+        image: quay.io/woohhan/kubespray-docker:latest
+        command: ["ansible-playbook", "-i", "/inventory/hosts.yaml", "--become", "--become-user=root", "reset.yml", "--private-key=/ssh/id_rsa", "-e reset_confirmation=yes"]
+        volumeMounts:
+        - mountPath: /inventory
+          name: inventory
+        - mountPath: /ssh
+          name: sshkey
+      volumes:
+      - name: inventory
+        hostPath:
+          path: /home/whhan91/.go/src/moingster/docs/design/moingster_poc/inventory
+      - name: sshkey
+        hostPath:
+          path: /home/whhan91/.ssh
+  backoffLimit: 3
