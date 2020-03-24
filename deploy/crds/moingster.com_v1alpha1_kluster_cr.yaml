@@ -1,0 +1,13 @@
+apiVersion: moingster.com/v1alpha1
+kind: Kluster
+metadata:
+  name: example-kluster
+spec:
+  kubernetes:
+    version: 1.17.2
+    networkProvider: weave
+  nodes:
+    count: 3
+    nodeSpec:
+      cores: 2
+      memoryMb: 4096
