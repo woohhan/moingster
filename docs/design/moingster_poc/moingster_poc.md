@@ -5,6 +5,14 @@
 
 ## 설치
 ```shell
+export KUBEVIRT_VERSION=v0.27.0
+kubectl create -f https://github.com/kubevirt/kubevirt/releases/download/${KUBEVIRT_VERSION}/kubevirt-operator.yaml
+kubectl create -f https://github.com/kubevirt/kubevirt/releases/download/${KUBEVIRT_VERSION}/kubevirt-cr.yaml
+
+export VERSION=v1.13.2
+kubectl create -f https://github.com/kubevirt/containerized-data-importer/releases/download/$VERSION/cdi-operator.yaml
+kubectl create -f https://github.com/kubevirt/containerized-data-importer/releases/download/$VERSION/cdi-cr.yaml
+
 # HTTP로부터 ubuntu 이미지 클론
 kubectl apply -f pvc_ubuntu.yaml
 
