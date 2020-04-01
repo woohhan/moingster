@@ -3,12 +3,15 @@ module github.com/woohhan/moingster
 go 1.13
 
 require (
+	github.com/go-logr/logr v0.1.0
 	github.com/operator-framework/operator-sdk v0.15.2
 	github.com/spf13/pflag v1.0.5
+	golang.org/x/crypto v0.0.0-20191028145041-f83a4685e152
 	k8s.io/api v0.16.4
 	k8s.io/apimachinery v0.16.4
 	k8s.io/client-go v12.0.0+incompatible
 	kubevirt.io/client-go v0.26.0
+	kubevirt.io/containerized-data-importer v1.10.6
 	sigs.k8s.io/controller-runtime v0.4.0
 )
 

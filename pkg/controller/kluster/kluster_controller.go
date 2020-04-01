@@ -2,12 +2,12 @@ package kluster
 
 import (
 	"context"
-
+	"github.com/go-logr/logr"
 	moingsterv1alpha1 "github.com/woohhan/moingster/pkg/apis/moingster/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	kubevirt "kubevirt.io/client-go/api/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -73,20 +73,16 @@ type ReconcileKluster struct {
 	scheme *runtime.Scheme
 }
 
+const klusterFinalizer = "finalizer.kluster.moingster.com"
+
 // Reconcile reads that state of the cluster for a Kluster object and makes changes based on the state read
-// and what is in the Kluster.Spec
-// TODO(user): Modify this Reconcile function to implement your Controller logic.  This example creates
-// a Pod as an example
-// Note:
-// The Controller will requeue the Request to be processed again if the returned error is non-nil or
-// Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
 func (r *ReconcileKluster) Reconcile(request reconcile.Request) (reconcile.Result, error) {
 	reqLogger := log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling Kluster")
 
-	// Fetch the Kluster instance
-	instance := &moingsterv1alpha1.Kluster{}
-	err := r.client.Get(context.TODO(), request.NamespacedName, instance)
+	// Fetch the Kluster
+	k := &moingsterv1alpha1.Kluster{}
+	err := r.client.Get(context.TODO(), request.NamespacedName, k)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
@@ -98,56 +94,125 @@ func (r *ReconcileKluster) Reconcile(request reconcile.Request) (reconcile.Resul
 		return reconcile.Result{}, err
 	}
 
-	/*
-		// Define a new Pod object
-		pod := newPodForCR(instance)
-
-		// Set Kluster instance as the owner and controller
-		if err := controllerutil.SetControllerReference(instance, pod, r.scheme); err != nil {
-			return reconcile.Result{}, err
-		}
-
-		// Check if this Pod already exists
-		found := &corev1.Pod{}
-		err = r.client.Get(context.TODO(), types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, found)
-		if err != nil && errors.IsNotFound(err) {
-			reqLogger.Info("Creating a new Pod", "Pod.Namespace", pod.Namespace, "Pod.Name", pod.Name)
-			err = r.client.Create(context.TODO(), pod)
-			if err != nil {
+	isKlusterToBeDeleted := k.GetDeletionTimestamp() != nil
+	if isKlusterToBeDeleted {
+		if contains(k.GetFinalizers(), klusterFinalizer) {
+			if err := r.finalizeKluster(reqLogger, k); err != nil {
 				return reconcile.Result{}, err
 			}
 
-			// Pod created successfully - don't requeue
-			return reconcile.Result{}, nil
-		} else if err != nil {
+			k.SetFinalizers(remove(k.GetFinalizers(), klusterFinalizer))
+			if err := r.client.Update(context.TODO(), k); err != nil {
+				return reconcile.Result{}, err
+			}
+		}
+		return reconcile.Result{}, nil
+	}
+
+	// Add finalizer for this CR
+	if !contains(k.GetFinalizers(), klusterFinalizer) {
+		if err := r.addFinalizer(log, k); err != nil {
 			return reconcile.Result{}, err
 		}
+	}
 
-		// Pod already exists - don't requeue
-		reqLogger.Info("Skip reconcile: Pod already exists", "Pod.Namespace", found.Namespace, "Pod.Name", found.Name)
-	*/
+	secret, err := r.secretReconcile(k)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	reqLogger.Info("secretReconcile OK", "secret", secret)
+
+	instances, err := r.instanceReconcile(k, secret)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	reqLogger.Info("instanceReconcile OK", "instance", instances)
+
+	/*
+		err = r.kubespray(k)
+		if err != nil {
+			return reconcile.Result{}, err
+		}*/
+
 	return reconcile.Result{}, nil
 }
 
-// newPodForCR returns a busybox pod with the same name/namespace as the cr
-func newPodForCR(cr *moingsterv1alpha1.Kluster) *corev1.Pod {
-	labels := map[string]string{
-		"app": cr.Name,
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
 	}
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      cr.Name + "-pod",
-			Namespace: cr.Namespace,
-			Labels:    labels,
-		},
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{
-				{
-					Name:    "busybox",
-					Image:   "busybox",
-					Command: []string{"sleep", "3600"},
-				},
-			},
-		},
+	return false
+}
+
+func remove(list []string, s string) []string {
+	for i, v := range list {
+		if v == s {
+			list = append(list[:i], list[i+1:]...)
+		}
 	}
+	return list
+}
+
+func (r *ReconcileKluster) addFinalizer(reqLogger logr.Logger, k *moingsterv1alpha1.Kluster) error {
+	k.SetFinalizers(append(k.GetFinalizers(), klusterFinalizer))
+	if err := r.client.Update(context.TODO(), k); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *ReconcileKluster) finalizeKluster(reqLogger logr.Logger, k *moingsterv1alpha1.Kluster) error {
+	for i := 0; i < k.Spec.Nodes.Count; i++ {
+		name := GetIdxName(k, i)
+
+		// Delete vm
+		vm := &kubevirt.VirtualMachine{}
+		if err := r.client.Get(context.TODO(), name, vm); err != nil {
+			if !errors.IsNotFound(err) {
+				return err
+			}
+		}
+		if err := r.client.Delete(context.TODO(), vm); err != nil {
+			return err
+		}
+
+		// Delete pvc
+		pvc := &corev1.PersistentVolumeClaim{}
+		if err := r.client.Get(context.TODO(), name, pvc); err != nil {
+			if !errors.IsNotFound(err) {
+				return err
+			}
+		}
+		if err := r.client.Delete(context.TODO(), pvc); err != nil {
+			return err
+		}
+
+		// Delete svc
+		svc := &corev1.Service{}
+		if err := r.client.Get(context.TODO(), name, svc); err != nil {
+			if !errors.IsNotFound(err) {
+				return err
+			}
+		}
+		if err := r.client.Delete(context.TODO(), svc); err != nil {
+			return err
+		}
+	}
+
+	// Delete secret
+	name := GetName(k)
+	secret := &corev1.Secret{}
+	if err := r.client.Get(context.TODO(), name, secret); err != nil {
+		if !errors.IsNotFound(err) {
+			return err
+		}
+	}
+	if err := r.client.Delete(context.TODO(), secret); err != nil {
+		return err
+	}
+
+	reqLogger.Info("Successfully finalized kluster")
+	return nil
 }

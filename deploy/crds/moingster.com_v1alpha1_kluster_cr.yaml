@@ -1,7 +1,7 @@
 apiVersion: moingster.com/v1alpha1
 kind: Kluster
 metadata:
-  name: example-kluster
+  name: example
 spec:
   kubernetes:
     version: 1.17.2
