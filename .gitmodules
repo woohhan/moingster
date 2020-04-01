@@ -1,0 +1,3 @@
+[submodule "docs/design/moingster_poc/csi-driver-host-path"]
+	path = docs/design/moingster_poc/csi-driver-host-path
+	url = https://github.com/kubernetes-csi/csi-driver-host-path.git
