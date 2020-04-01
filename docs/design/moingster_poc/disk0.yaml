@@ -1,15 +1,15 @@
-apiVersion: cdi.kubevirt.io/v1alpha1
-kind: DataVolume
+apiVersion: v1
+kind: PersistentVolumeClaim
 metadata:
   name: disk0
 spec:
-  source:
-    pvc:
-      namespace: default
-      name: ubuntu
-  pvc:
-    accessModes:
-      - ReadWriteOnce
-    resources:
-      requests:
-        storage: 6Gi
+  storageClassName: csi-hostpath-sc
+  dataSource:
+    name: ubuntu
+    kind: PersistentVolumeClaim
+    apiGroup: ""
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 6Gi

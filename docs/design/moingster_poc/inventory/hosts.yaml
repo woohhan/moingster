@@ -1,11 +1,11 @@
 all:
   hosts:
     node1:
-      ansible_host: vm0
+      ansible_host: kluster-example-0
     node2:
-      ansible_host: vm1
+      ansible_host: kluster-example-1
     node3:
-      ansible_host: vm2
+      ansible_host: kluster-example-2
   children:
     kube-master:
       hosts:
