@@ -28,9 +28,20 @@ type NodeSpec struct {
 	MemoryMb int `json:"memoryMb"`
 }
 
+type KlusterState string
+
+const (
+	KlusterWaitingJob KlusterState = "WaitingJob"
+	KlusterCreating   KlusterState = "Creating"
+	KlusterDeleting   KlusterState = "Deleting"
+	KlusterAvailable  KlusterState = "Available"
+	KlusterError      KlusterState = "Error"
+)
+
 // KlusterStatus defines the observed state of Kluster
 type KlusterStatus struct {
-	State string `json:"state"`
+	State  KlusterState `json:"state"`
+	Reason string       `json:"reason"`
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
 	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
@@ -45,7 +56,7 @@ type Kluster struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   KlusterSpec   `json:"spec,omitempty"`
+	Spec   KlusterSpec   `json:"spec"`
 	Status KlusterStatus `json:"status,omitempty"`
 }
 

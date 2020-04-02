@@ -2,12 +2,13 @@ package kluster
 
 import (
 	"context"
-	"github.com/go-logr/logr"
 	moingsterv1alpha1 "github.com/woohhan/moingster/pkg/apis/moingster/v1alpha1"
+	"github.com/woohhan/moingster/pkg/kluster"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	kubevirt "kubevirt.io/client-go/api/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -15,14 +16,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+	"time"
 )
 
 var log = logf.Log.WithName("controller_kluster")
-
-/**
-* USER ACTION REQUIRED: This is a scaffold file intended for the user to modify with their own Controller
-* business logic.  Delete these comments after modifying this file.*
- */
 
 // Add creates a new Kluster Controller and adds it to the Manager. The Manager will set fields on the Controller
 // and Start it when the Manager is Started.
@@ -51,7 +48,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 
 	// TODO(user): Modify this to be the types you create that are owned by the primary resource
 	// Watch for changes to secondary resource Pods and requeue the owner Kluster
-	err = c.Watch(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
+	err = c.Watch(&source.Kind{Type: &corev1.Secret{}}, &handler.EnqueueRequestForOwner{
 		IsController: true,
 		OwnerType:    &moingsterv1alpha1.Kluster{},
 	})
@@ -73,7 +70,13 @@ type ReconcileKluster struct {
 	scheme *runtime.Scheme
 }
 
-const klusterFinalizer = "finalizer.kluster.moingster.com"
+func (r *ReconcileKluster) updateStatus(k *moingsterv1alpha1.Kluster, status moingsterv1alpha1.KlusterStatus) error {
+	k.Status = status
+	if err := r.client.Status().Update(context.TODO(), k); err != nil {
+		return err
+	}
+	return nil
+}
 
 // Reconcile reads that state of the cluster for a Kluster object and makes changes based on the state read
 func (r *ReconcileKluster) Reconcile(request reconcile.Request) (reconcile.Result, error) {
@@ -94,8 +97,8 @@ func (r *ReconcileKluster) Reconcile(request reconcile.Request) (reconcile.Resul
 		return reconcile.Result{}, err
 	}
 
-	isKlusterToBeDeleted := k.GetDeletionTimestamp() != nil
-	if isKlusterToBeDeleted {
+	// Delete first if we need
+	if isKlusterTobeDeleted(k) {
 		if contains(k.GetFinalizers(), klusterFinalizer) {
 			if err := r.finalizeKluster(reqLogger, k); err != nil {
 				return reconcile.Result{}, err
@@ -109,110 +112,133 @@ func (r *ReconcileKluster) Reconcile(request reconcile.Request) (reconcile.Resul
 		return reconcile.Result{}, nil
 	}
 
-	// Add finalizer for this CR
-	if !contains(k.GetFinalizers(), klusterFinalizer) {
-		if err := r.addFinalizer(log, k); err != nil {
+	// First start
+	if len(k.Status.State) == 0 {
+		if err := r.updateStatus(k, moingsterv1alpha1.KlusterStatus{State: moingsterv1alpha1.KlusterCreating,}); err != nil {
 			return reconcile.Result{}, err
 		}
-	}
 
-	secret, err := r.secretReconcile(k)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-	reqLogger.Info("secretReconcile OK", "secret", secret)
+		// Add finalizer for this CR
+		if !contains(k.GetFinalizers(), klusterFinalizer) {
+			if err := r.addFinalizer(log, k); err != nil {
+				return reconcile.Result{}, err
+			}
+		}
 
-	instances, err := r.instanceReconcile(k, secret)
-	if err != nil {
-		return reconcile.Result{}, err
-	}
-	reqLogger.Info("instanceReconcile OK", "instance", instances)
+		// We doesn't return with `reconcile.Result{requeue: true}, nil` from here to end of this block
+		// Because ssh secret, vm, disk are stateful, and doen't have any meaning to recreate.
 
-	/*
-		err = r.kubespray(k)
+		// Create ssh secret
+		name := GetNamespacedName(k)
+		secret, err := kluster.GetSshKeySecret(name)
 		if err != nil {
 			return reconcile.Result{}, err
-		}*/
+		}
+		if err := r.client.Create(context.TODO(), secret); err != nil {
+			if err := r.updateStatus(k, moingsterv1alpha1.KlusterStatus{State: moingsterv1alpha1.KlusterError, Reason: "SshSecretCreateFailed"}); err != nil {
+				return reconcile.Result{}, err
+			}
+			return reconcile.Result{}, err
+		}
+
+		// Create instance
+		for i := 0; i < k.Spec.Nodes.Count; i++ {
+			name := GetNamespacedNameWithIdx(k, i)
+
+			// Create disk
+			disk := kluster.GetDiskPvc(name, 6, "csi-hostpath-sc")
+			reqLogger.Info("Create disk", "disk", disk)
+			if err := r.client.Create(context.TODO(), disk); err != nil {
+				if err := r.updateStatus(k, moingsterv1alpha1.KlusterStatus{State: moingsterv1alpha1.KlusterError, Reason: "DiskPvcCreateFailed"}); err != nil {
+					return reconcile.Result{}, err
+				}
+				return reconcile.Result{}, err
+			}
+			// TODO: Wait for disk preparing... Because hostpath has bug that make multiple disks once, It failed.
+			err := wait.PollImmediate(3*time.Second, 300*time.Second, func() (done bool, err error) {
+				pvc := &corev1.PersistentVolumeClaim{}
+				if err := r.client.Get(context.TODO(), name, pvc); err != nil {
+					if errors.IsNotFound(err) {
+						return false, nil
+					} else {
+						return false, err
+					}
+				}
+				return pvc.Status.Phase == corev1.ClaimBound, nil
+			})
+			if err != nil {
+				if err := r.updateStatus(k, moingsterv1alpha1.KlusterStatus{State: moingsterv1alpha1.KlusterError, Reason: "DiskPvcCreateFailed"}); err != nil {
+					return reconcile.Result{}, err
+				}
+				return reconcile.Result{}, err
+			}
+
+			// Create vm
+			vm := kluster.GetVm(name, k.Name, 4096, 2, name.Name, string(secret.Data["publicKey"]))
+			reqLogger.Info("Create vm", "vm", vm)
+			if err := r.client.Create(context.TODO(), vm); err != nil {
+				if err := r.updateStatus(k, moingsterv1alpha1.KlusterStatus{State: moingsterv1alpha1.KlusterError, Reason: "VmCreateFailed"}); err != nil {
+					return reconcile.Result{}, err
+				}
+				return reconcile.Result{}, err
+			}
+
+			// Create svc
+			svc := kluster.GetSvc(name)
+			reqLogger.Info("Create svc", "svc", svc)
+			if err := r.client.Create(context.TODO(), svc); err != nil {
+				if err := r.updateStatus(k, moingsterv1alpha1.KlusterStatus{State: moingsterv1alpha1.KlusterError, Reason: "ServiceCreateFailed"}); err != nil {
+					return reconcile.Result{}, err
+				}
+				return reconcile.Result{}, err
+			}
+		}
+
+		// TODO: wait for ssh connection
+
+		// Run kubespray job
+		job := kluster.GetKubesprayJob(name);
+		reqLogger.Info("Create job", "job", job)
+		if err := r.client.Create(context.TODO(), job); err != nil {
+			if err := r.updateStatus(k, moingsterv1alpha1.KlusterStatus{State: moingsterv1alpha1.KlusterError, Reason: "JobCreateFailed"}); err != nil {
+				return reconcile.Result{}, err
+			}
+			return reconcile.Result{}, err
+		}
+		// Wait for job
+		err = wait.Poll(5*time.Second, 60*time.Minute, func() (bool, error) {
+			job := &batchv1.Job{}
+			if err := r.client.Get(context.TODO(), name, job); err != nil {
+				return false, err
+			}
+			if job.Status.Active > 0 {
+				return false, nil
+			}
+			if job.Status.Succeeded > 0 {
+				return true, nil
+			}
+			// still init...
+			return false, nil
+		})
+		if err != nil {
+			if err := r.updateStatus(k, moingsterv1alpha1.KlusterStatus{State: moingsterv1alpha1.KlusterError, Reason: "JobWaitingFailed"}); err != nil {
+				return reconcile.Result{}, err
+			}
+			return reconcile.Result{}, err
+		}
+		// Delete job
+		if err := r.client.Delete(context.TODO(), job); err != nil {
+			if err := r.updateStatus(k, moingsterv1alpha1.KlusterStatus{State: moingsterv1alpha1.KlusterError, Reason: "JobWaitingFailed"}); err != nil {
+				return reconcile.Result{}, err
+			}
+			return reconcile.Result{}, err
+		}
+
+		// Update to Created
+		if err := r.updateStatus(k, moingsterv1alpha1.KlusterStatus{State: moingsterv1alpha1.KlusterAvailable}); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
 
 	return reconcile.Result{}, nil
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
-func remove(list []string, s string) []string {
-	for i, v := range list {
-		if v == s {
-			list = append(list[:i], list[i+1:]...)
-		}
-	}
-	return list
-}
-
-func (r *ReconcileKluster) addFinalizer(reqLogger logr.Logger, k *moingsterv1alpha1.Kluster) error {
-	k.SetFinalizers(append(k.GetFinalizers(), klusterFinalizer))
-	if err := r.client.Update(context.TODO(), k); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (r *ReconcileKluster) finalizeKluster(reqLogger logr.Logger, k *moingsterv1alpha1.Kluster) error {
-	for i := 0; i < k.Spec.Nodes.Count; i++ {
-		name := GetIdxName(k, i)
-
-		// Delete vm
-		vm := &kubevirt.VirtualMachine{}
-		if err := r.client.Get(context.TODO(), name, vm); err != nil {
-			if !errors.IsNotFound(err) {
-				return err
-			}
-		}
-		if err := r.client.Delete(context.TODO(), vm); err != nil {
-			return err
-		}
-
-		// Delete pvc
-		pvc := &corev1.PersistentVolumeClaim{}
-		if err := r.client.Get(context.TODO(), name, pvc); err != nil {
-			if !errors.IsNotFound(err) {
-				return err
-			}
-		}
-		if err := r.client.Delete(context.TODO(), pvc); err != nil {
-			return err
-		}
-
-		// Delete svc
-		svc := &corev1.Service{}
-		if err := r.client.Get(context.TODO(), name, svc); err != nil {
-			if !errors.IsNotFound(err) {
-				return err
-			}
-		}
-		if err := r.client.Delete(context.TODO(), svc); err != nil {
-			return err
-		}
-	}
-
-	// Delete secret
-	name := GetName(k)
-	secret := &corev1.Secret{}
-	if err := r.client.Get(context.TODO(), name, secret); err != nil {
-		if !errors.IsNotFound(err) {
-			return err
-		}
-	}
-	if err := r.client.Delete(context.TODO(), secret); err != nil {
-		return err
-	}
-
-	reqLogger.Info("Successfully finalized kluster")
-	return nil
 }

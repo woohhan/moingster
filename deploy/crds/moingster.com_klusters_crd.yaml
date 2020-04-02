@@ -66,11 +66,16 @@ spec:
         status:
           description: KlusterStatus defines the observed state of Kluster
           properties:
+            reason:
+              type: string
             state:
               type: string
           required:
+          - reason
           - state
           type: object
+      required:
+      - spec
       type: object
   version: v1alpha1
   versions:

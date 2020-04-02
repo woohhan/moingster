@@ -22,7 +22,7 @@ kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snaps
 kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/${SNAPSHOTTER_VERSION}/config/crd/snapshot.storage.k8s.io_volumesnapshots.yaml
 kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/${SNAPSHOTTER_VERSION}/deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml
 kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/${SNAPSHOTTER_VERSION}/deploy/kubernetes/snapshot-controller/setup-snapshot-controller.yaml
-CSI_ATTACHER_TAG=v2.1.1 ./csi-driver-host-path/deploy/kubernetes-1.17/deploy-hostpath.sh     # attacher v2.1.0 이하에서 disk를 여러개 한 번에 만들면 안만들어짐
+./csi-driver-host-path/deploy/kubernetes-1.17/deploy-hostpath.sh
 kubectl apply -f ./csi-driver-host-path/examples/csi-storageclass.yaml
 
 # 이미지 업로드

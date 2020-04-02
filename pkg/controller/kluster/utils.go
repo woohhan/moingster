@@ -6,10 +6,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-func GetName(k *moingsterv1alpha1.Kluster) types.NamespacedName {
+func GetNamespacedName(k *moingsterv1alpha1.Kluster) types.NamespacedName {
 	return types.NamespacedName{Name: fmt.Sprintf("kluster-%s", k.Name), Namespace: k.Namespace}
 }
 
-func GetIdxName(k *moingsterv1alpha1.Kluster, idx int) types.NamespacedName {
+func GetNamespacedNameWithIdx(k *moingsterv1alpha1.Kluster, idx int) types.NamespacedName {
 	return types.NamespacedName{Name: fmt.Sprintf("kluster-%s-%d", k.Name, idx), Namespace: k.Namespace}
 }
